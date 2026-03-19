@@ -64,7 +64,10 @@ def get_settings_repository() -> SettingsRepository:
 def get_connectors() -> dict[str, BaseConnector]:
     runtime_config = get_runtime_config()
     return {
-        "openalex": OpenAlexConnector(mailto=runtime_config.openalex_mailto or None),
+        "openalex": OpenAlexConnector(
+            mailto=runtime_config.openalex_mailto or None,
+            trust_env_proxy=runtime_config.openalex_trust_env_proxy,
+        ),
         "arxiv": ArxivConnector(),
     }
 

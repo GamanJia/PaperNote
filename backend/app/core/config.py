@@ -20,6 +20,7 @@ class RuntimeConfig:
     openai_base_url: str
     default_model_name: str
     openalex_mailto: str
+    openalex_trust_env_proxy: bool
     ollama_base_url: str
     backend_host: str
     backend_port: int
@@ -37,6 +38,8 @@ def load_runtime_config() -> RuntimeConfig:
         "http://127.0.0.1:5173,http://localhost:5173",
     )
     frontend_origins = [item.strip() for item in frontend_origins_raw.split(",") if item.strip()]
+    openalex_trust_env_proxy_raw = os.getenv("OPENALEX_TRUST_ENV_PROXY", "false").strip().lower()
+    openalex_trust_env_proxy = openalex_trust_env_proxy_raw in {"1", "true", "yes", "on"}
 
     return RuntimeConfig(
         project_root=project_root,
@@ -49,6 +52,7 @@ def load_runtime_config() -> RuntimeConfig:
         openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         default_model_name=os.getenv("DEFAULT_MODEL_NAME", "gpt-4o-mini"),
         openalex_mailto=os.getenv("OPENALEX_MAILTO", "").strip(),
+        openalex_trust_env_proxy=openalex_trust_env_proxy,
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         backend_host=os.getenv("BACKEND_HOST", "127.0.0.1"),
         backend_port=int(os.getenv("BACKEND_PORT", "8000")),

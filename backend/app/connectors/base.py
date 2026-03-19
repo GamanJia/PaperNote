@@ -18,6 +18,7 @@ class ConnectorQuery(BaseModel):
     date_start: str | None = None
     date_end: str | None = None
     max_results: int = 50
+    strict_venue_match: bool = True
 
 
 class BaseConnector(ABC):

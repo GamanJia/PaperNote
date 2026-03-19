@@ -49,9 +49,12 @@ class OpenAlexConnector(BaseConnector):
     max_retry_attempts = 2
     request_timeout_seconds = 12
     max_query_variants = 3
+    max_retry_after_seconds = 5
+    max_retry_backoff_seconds = 3
 
-    def __init__(self, mailto: str | None = None) -> None:
+    def __init__(self, mailto: str | None = None, trust_env_proxy: bool = False) -> None:
         self.mailto = (mailto or "").strip() or None
+        self.trust_env_proxy = trust_env_proxy
 
     async def _fetch_works(self, client: httpx.AsyncClient, params: dict[str, str | int]) -> list[dict]:
         for attempt in range(self.max_retry_attempts):
@@ -59,18 +62,23 @@ class OpenAlexConnector(BaseConnector):
                 response = await client.get(self.endpoint, params=params)
                 if response.status_code == 429:
                     retry_after = response.headers.get("Retry-After")
+                    wait_seconds = 0.0
                     if retry_after:
                         try:
-                            wait_seconds = max(1.0, float(retry_after))
+                            wait_seconds = max(0.0, float(retry_after))
                         except ValueError:
                             wait_seconds = float(2 ** attempt)
-                    else:
-                        wait_seconds = float(2 ** attempt)
-                    if attempt < self.max_retry_attempts - 1:
+
+                    # OpenAlex 在额度耗尽时会返回很大的 Retry-After，直接快速失败，避免请求长时间卡住。
+                    if wait_seconds > self.max_retry_after_seconds:
+                        return []
+                    if attempt < self.max_retry_attempts - 1 and wait_seconds > 0:
                         await asyncio.sleep(wait_seconds)
                         continue
+                    return []
                 if 500 <= response.status_code < 600 and attempt < self.max_retry_attempts - 1:
-                    await asyncio.sleep(float(2 ** attempt))
+                    wait_seconds = min(float(2 ** attempt), self.max_retry_backoff_seconds)
+                    await asyncio.sleep(wait_seconds)
                     continue
 
                 response.raise_for_status()
@@ -79,7 +87,8 @@ class OpenAlexConnector(BaseConnector):
             except (httpx.TimeoutException, httpx.TransportError):
                 if attempt >= self.max_retry_attempts - 1:
                     raise
-                await asyncio.sleep(float(2 ** attempt))
+                wait_seconds = min(float(2 ** attempt), self.max_retry_backoff_seconds)
+                await asyncio.sleep(wait_seconds)
 
         return []
 
@@ -308,7 +317,12 @@ class OpenAlexConnector(BaseConnector):
             base_params["filter"] = ",".join(filters)
 
         raw_items: list[dict] = []
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        headers = {"User-Agent": "PaperNote/0.1 (OpenAlexConnector)"}
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout_seconds,
+            trust_env=self.trust_env_proxy,
+            headers=headers,
+        ) as client:
             for search_query in search_queries:
                 params = base_params.copy()
                 if search_query:
@@ -349,7 +363,11 @@ class OpenAlexConnector(BaseConnector):
             primary_venue = source.get("display_name")
             venue_texts = self._extract_venue_texts(item)
 
-            if not self._matches_venue(venue_texts, query.journals, query.conferences):
+            if query.strict_venue_match and not self._matches_venue(
+                venue_texts,
+                query.journals,
+                query.conferences,
+            ):
                 continue
 
             venue = self._pick_display_venue(primary_venue, venue_texts, query.journals, query.conferences)
