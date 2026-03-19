@@ -13,7 +13,8 @@ import type { LLMConfig, PaperResult } from "../types";
 export function runSearch(payload: SearchRequest): Promise<SearchResponse> {
   return apiRequest<SearchResponse>("/api/search", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    timeoutMs: 180000
   });
 }
 

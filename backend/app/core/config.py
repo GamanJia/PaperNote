@@ -19,6 +19,7 @@ class RuntimeConfig:
     openai_api_key: str
     openai_base_url: str
     default_model_name: str
+    openalex_mailto: str
     ollama_base_url: str
     backend_host: str
     backend_port: int
@@ -47,6 +48,7 @@ def load_runtime_config() -> RuntimeConfig:
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         default_model_name=os.getenv("DEFAULT_MODEL_NAME", "gpt-4o-mini"),
+        openalex_mailto=os.getenv("OPENALEX_MAILTO", "").strip(),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         backend_host=os.getenv("BACKEND_HOST", "127.0.0.1"),
         backend_port=int(os.getenv("BACKEND_PORT", "8000")),

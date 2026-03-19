@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   Input,
   InputNumber,
   message,
+  Progress,
   Row,
   Select,
   Space,
@@ -21,7 +22,7 @@ import type { Dayjs } from "dayjs";
 import { buildApiUrl } from "../api/client";
 import { exportResults, getSettings, listSources, runSearch } from "../api/papernote";
 import { ResultsTable } from "../components/ResultsTable";
-import type { LLMConfig, SearchRequest, SearchResponse, SourceItem } from "../types";
+import type { AppSettings, LLMConfig, SearchRequest, SearchResponse, SourceItem } from "../types";
 
 const { TextArea } = Input;
 const { Title, Text } = Typography;
@@ -42,6 +43,15 @@ interface SearchFormValues {
   llm_concurrency: number;
   cache_ttl_minutes: number;
 }
+
+const BACKEND_DEFAULT_MODEL_FALLBACK: LLMConfig = {
+  provider_type: "openai-compatible",
+  base_url: null,
+  model_name: "",
+  api_key: null,
+  temperature: 0.2,
+  max_tokens: 1024
+};
 
 function toPayload(values: SearchFormValues, model: LLMConfig): SearchRequest {
   return {
@@ -74,41 +84,111 @@ function toPayload(values: SearchFormValues, model: LLMConfig): SearchRequest {
 export function SearchPage() {
   const [form] = Form.useForm<SearchFormValues>();
   const [loading, setLoading] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+  const [estimatedSeconds, setEstimatedSeconds] = useState(0);
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
   const [sources, setSources] = useState<SourceItem[]>([]);
   const [modelConfig, setModelConfig] = useState<LLMConfig | null>(null);
+  const progressTimerRef = useRef<number | null>(null);
+
+  const stopProgressTicker = () => {
+    if (progressTimerRef.current !== null) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+  };
+
+  const estimateSearchSeconds = (values: SearchFormValues): number => {
+    let estimate = 12;
+    if (values.sources?.includes("openalex")) estimate += 10;
+    if (values.sources?.includes("arxiv")) estimate += 4;
+    if (values.enable_keyword_expansion) estimate += 5;
+    if (values.enable_llm_filter) estimate += 18;
+    if ((values.max_results ?? 40) > 40) estimate += 6;
+    return Math.min(90, Math.max(8, estimate));
+  };
+
+  const applySettings = (settings: AppSettings) => {
+    const nextModel: LLMConfig = {
+      ...settings.default_model,
+      api_key: null
+    };
+    setModelConfig(nextModel);
+    form.setFieldsValue({
+      sources: settings.enabled_sources.length ? settings.enabled_sources : ["openalex", "arxiv"]
+    });
+    return nextModel;
+  };
+
+  const loadSettings = async (notifyOnError: boolean): Promise<LLMConfig | null> => {
+    try {
+      const settings = await getSettings();
+      return applySettings(settings);
+    } catch (error) {
+      if (notifyOnError) {
+        message.error(error instanceof Error ? error.message : "加载默认模型配置失败");
+      }
+      return null;
+    }
+  };
 
   useEffect(() => {
-    Promise.all([listSources(), getSettings()])
-      .then(([sourceData, settings]) => {
+    listSources()
+      .then((sourceData) => {
         setSources(sourceData);
-        setModelConfig({
-          ...settings.default_model,
-          api_key: null
-        });
-        form.setFieldsValue({
-          sources: settings.enabled_sources.length ? settings.enabled_sources : ["openalex", "arxiv"]
-        });
       })
       .catch((error: Error) => message.error(error.message));
-  }, [form]);
+
+    loadSettings(false).then((loaded) => {
+      if (!loaded) {
+        message.warning("默认模型配置加载失败，可稍后重试或检查后端服务。");
+      }
+    });
+
+    return () => {
+      stopProgressTicker();
+    };
+  }, []);
 
   const onSearch = async (values: SearchFormValues) => {
-    if (!modelConfig) {
-      message.error("默认模型配置未加载，请先检查设置页或后端服务");
-      return;
+    let activeModel = modelConfig;
+    if (!activeModel) {
+      activeModel = await loadSettings(true);
     }
+    if (!activeModel) {
+      message.warning("默认模型配置未加载，已回退为后端默认配置继续检索。");
+    }
+    const requestModel = activeModel ?? BACKEND_DEFAULT_MODEL_FALLBACK;
     if (values.date_start && values.date_end && values.date_start.isSame(values.date_end, "day")) {
       message.warning("当前日期范围仅 1 天，可能导致 0 结果。建议扩大到至少 1 个月。");
     }
+    const estimate = estimateSearchSeconds(values);
+    setEstimatedSeconds(estimate);
+    setSearchProgress(2);
+    stopProgressTicker();
+    const startedAt = Date.now();
+    progressTimerRef.current = window.setInterval(() => {
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const ratio = Math.min(1, elapsed / estimate);
+      const next = Math.min(95, Math.round(2 + ratio * 93));
+      setSearchProgress((prev) => (next > prev ? next : prev));
+    }, 350);
     setLoading(true);
     try {
-      const response = await runSearch(toPayload(values, modelConfig));
+      const response = await runSearch(toPayload(values, requestModel));
       setSearchResult(response);
+      setSearchProgress(100);
       message.success(`检索完成，返回 ${response.results.length} 篇论文`);
+      if (response.stats.failed_sources.length) {
+        message.warning(
+          `部分数据源未完成：${response.stats.failed_sources.join(", ")}。已返回可用结果。`
+        );
+      }
     } catch (error) {
+      setSearchProgress(100);
       message.error(error instanceof Error ? error.message : "检索失败");
     } finally {
+      stopProgressTicker();
       setLoading(false);
     }
   };
@@ -252,6 +332,13 @@ export function SearchPage() {
             showIcon
             message="模型配置来自“设置页”（或 .env 默认值），检索页不再重复填写。"
           />
+
+          {loading ? (
+            <Space direction="vertical" style={{ width: "100%" }} size={4}>
+              <Text type="secondary">预计等待约 {estimatedSeconds} 秒（动态估算）</Text>
+              <Progress percent={searchProgress} status="active" size="small" />
+            </Space>
+          ) : null}
 
           <Button type="primary" htmlType="submit" loading={loading}>
             开始检索

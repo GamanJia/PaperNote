@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Iterable
 from uuid import uuid4
@@ -22,6 +23,7 @@ class OpenAlexConnector(BaseConnector):
         "nips": "neural information processing systems",
         "aaai": "aaai conference on artificial intelligence",
         "acl": "annual meeting of the association for computational linguistics",
+        "asplos": "architectural support for programming languages and operating systems",
         "cvpr": "conference on computer vision and pattern recognition",
         "eccv": "european conference on computer vision",
         "iccv": "international conference on computer vision",
@@ -44,6 +46,42 @@ class OpenAlexConnector(BaseConnector):
         "nips": "S4306420609",
         "aaai": "S4210191458",
     }
+    max_retry_attempts = 2
+    request_timeout_seconds = 12
+    max_query_variants = 3
+
+    def __init__(self, mailto: str | None = None) -> None:
+        self.mailto = (mailto or "").strip() or None
+
+    async def _fetch_works(self, client: httpx.AsyncClient, params: dict[str, str | int]) -> list[dict]:
+        for attempt in range(self.max_retry_attempts):
+            try:
+                response = await client.get(self.endpoint, params=params)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_seconds = max(1.0, float(retry_after))
+                        except ValueError:
+                            wait_seconds = float(2 ** attempt)
+                    else:
+                        wait_seconds = float(2 ** attempt)
+                    if attempt < self.max_retry_attempts - 1:
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                if 500 <= response.status_code < 600 and attempt < self.max_retry_attempts - 1:
+                    await asyncio.sleep(float(2 ** attempt))
+                    continue
+
+                response.raise_for_status()
+                payload = response.json()
+                return payload.get("results", [])
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt >= self.max_retry_attempts - 1:
+                    raise
+                await asyncio.sleep(float(2 ** attempt))
+
+        return []
 
     def _reconstruct_abstract(self, inverted_index: dict | None) -> str:
         if not inverted_index:
@@ -193,7 +231,9 @@ class OpenAlexConnector(BaseConnector):
             seen.add(key)
             deduped_queries.append(item)
 
-        return deduped_queries or [None]
+        if not deduped_queries:
+            return [None]
+        return deduped_queries[: self.max_query_variants]
 
     def _build_core_semantic_query(self, query: ConnectorQuery) -> str | None:
         terms = query.keywords[:]
@@ -250,6 +290,8 @@ class OpenAlexConnector(BaseConnector):
             # OpenAlex 默认相关性排序较宽泛，适当提高抓取上限以避免漏召回。
             "per-page": max(100, min(query.max_results * 3, 200)),
         }
+        if self.mailto:
+            base_params["mailto"] = self.mailto
         search_queries = self._build_search_queries(query)
 
         filters: list[str] = []
@@ -266,15 +308,12 @@ class OpenAlexConnector(BaseConnector):
             base_params["filter"] = ",".join(filters)
 
         raw_items: list[dict] = []
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
             for search_query in search_queries:
                 params = base_params.copy()
                 if search_query:
                     params["search"] = search_query
-                response = await client.get(self.endpoint, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                raw_items.extend(payload.get("results", []))
+                raw_items.extend(await self._fetch_works(client, params))
 
             conference_source_ids: set[str] = set()
             for conf in query.conferences:
@@ -291,25 +330,7 @@ class OpenAlexConnector(BaseConnector):
                 params["filter"] = f"{source_filter},{filters_text}" if filters_text else source_filter
                 if targeted_query:
                     params["search"] = targeted_query
-                response = await client.get(self.endpoint, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                raw_items.extend(payload.get("results", []))
-
-                if targeted_query:
-                    fallback_params = base_params.copy()
-                    fallback_filters_text = str(fallback_params.get("filter") or "")
-                    fallback_params["filter"] = (
-                        f"{source_filter},{fallback_filters_text}"
-                        if fallback_filters_text
-                        else source_filter
-                    )
-                    fallback_response = await client.get(self.endpoint, params=fallback_params)
-                    fallback_response.raise_for_status()
-                    fallback_payload = fallback_response.json()
-                    for fallback_item in fallback_payload.get("results", []):
-                        if self._matches_semantic_focus(fallback_item, query):
-                            raw_items.append(fallback_item)
+                raw_items.extend(await self._fetch_works(client, params))
 
         deduped_raw_items: list[dict] = []
         seen_item_keys: set[str] = set()

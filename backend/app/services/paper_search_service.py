@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -13,9 +14,13 @@ from app.utils.text_utils import normalize_doi, normalize_title, split_keywords
 
 
 class PaperSearchService:
+    logger = logging.getLogger(__name__)
+
     def __init__(self, connectors: dict[str, BaseConnector], cache_repository: CacheRepository) -> None:
         self.connectors = connectors
         self.cache_repository = cache_repository
+        # 单数据源硬超时，避免前端长时间无响应。
+        self.source_timeout_seconds = 25
 
     def _deduplicate(self, papers: list[Paper]) -> list[Paper]:
         seen: set[str] = set()
@@ -77,14 +82,17 @@ class PaperSearchService:
         ttl_seconds: int,
     ) -> list[Paper]:
         cache_key = (
-            f"source:{source_key}:v9:"
+            f"source:{source_key}:v11:"
             f"{json.dumps(query.model_dump(mode='json'), ensure_ascii=False, sort_keys=True)}"
         )
         cached = self.cache_repository.get(cache_key)
         if cached:
             return [Paper.model_validate(item) for item in cached]
 
-        papers = await connector.search(query)
+        papers = await asyncio.wait_for(
+            connector.search(query),
+            timeout=self.source_timeout_seconds,
+        )
         self.cache_repository.set(cache_key, [item.model_dump() for item in papers], ttl_seconds=ttl_seconds)
         return papers
 
@@ -139,6 +147,13 @@ class PaperSearchService:
                     source_papers = await task
                     local_source_counts[source_key] = len(source_papers)
                     local_merged.extend(source_papers)
+                except asyncio.TimeoutError:
+                    self.logger.warning(
+                        "source %s timeout after %ss",
+                        source_key,
+                        self.source_timeout_seconds,
+                    )
+                    local_failed_sources.append(source_key)
                 except Exception:
                     local_failed_sources.append(source_key)
 

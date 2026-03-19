@@ -18,9 +18,17 @@ app = FastAPI(
     description="Local paper retrieval and LLM ranking service",
 )
 
+local_origin_regex = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|0\.0\.0\.0|"
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r")(?::\d+)?$"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=runtime_config.frontend_origins or ["*"],
+    allow_origins=runtime_config.frontend_origins or [],
+    allow_origin_regex=local_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

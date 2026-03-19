@@ -62,8 +62,9 @@ def get_settings_repository() -> SettingsRepository:
 
 @lru_cache(maxsize=1)
 def get_connectors() -> dict[str, BaseConnector]:
+    runtime_config = get_runtime_config()
     return {
-        "openalex": OpenAlexConnector(),
+        "openalex": OpenAlexConnector(mailto=runtime_config.openalex_mailto or None),
         "arxiv": ArxivConnector(),
     }
 

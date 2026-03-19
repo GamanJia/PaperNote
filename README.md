@@ -88,6 +88,7 @@ Copy-Item .env.example .env
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 DEFAULT_MODEL_NAME=gpt-4o-mini
+OPENALEX_MAILTO=
 OLLAMA_BASE_URL=http://localhost:11434
 BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8000
@@ -162,6 +163,8 @@ npm run dev -- --host 127.0.0.1 --port 5173
 cd backend
 pip install -r requirements.txt
 ```
+
+建议配置 `OPENALEX_MAILTO` 为你的邮箱，以启用 OpenAlex polite pool，降低 429 限流概率。
 
 ## 数据与隐私
 

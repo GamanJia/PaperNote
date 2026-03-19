@@ -15,6 +15,10 @@ class PaperRankerService:
     def __init__(self, llm_service: LLMService, cache_repository: CacheRepository) -> None:
         self.llm_service = llm_service
         self.cache_repository = cache_repository
+        # 单篇论文 LLM 分析超时，超时后退化到启发式分析。
+        self.paper_llm_timeout_seconds = 4
+        # 排序阶段整体超时，超过后退化为启发式排序返回。
+        self.rank_timeout_seconds = 30
 
     def _heuristic_analysis(self, parsed_query: ParsedQuery, paper: Paper) -> dict:
         all_keywords = split_keywords(parsed_query.keywords + parsed_query.expanded_keywords)
@@ -60,7 +64,10 @@ class PaperRankerService:
             analysis = cached
         else:
             try:
-                analysis = await self.llm_service.analyze_paper(request.model, parsed_query, paper)
+                analysis = await asyncio.wait_for(
+                    self.llm_service.analyze_paper(request.model, parsed_query, paper),
+                    timeout=self.paper_llm_timeout_seconds,
+                )
             except Exception:
                 analysis = self._heuristic_analysis(parsed_query, paper)
             self.cache_repository.set(cache_key, analysis, ttl_seconds=86400)
@@ -99,26 +106,46 @@ class PaperRankerService:
             ]
             return self._sort_results(request, results)[: request.params.max_results]
 
+        llm_candidate_limit = request.params.max_results
+        llm_candidates = papers[:llm_candidate_limit]
+        overflow_candidates = papers[llm_candidate_limit:]
+
         semaphore = asyncio.Semaphore(request.params.llm_concurrency)
 
         async def guarded(paper: Paper) -> PaperResult:
             async with semaphore:
                 return await self._analyze_one(request, parsed_query, paper)
 
-        tasks = [guarded(paper) for paper in papers]
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [guarded(paper) for paper in llm_candidates]
+        try:
+            raw_results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=self.rank_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raw_results = [self._heuristic_analysis(parsed_query, paper) for paper in llm_candidates]
 
         results: list[PaperResult] = []
         for idx, item in enumerate(raw_results):
+            if isinstance(item, dict):
+                results.append(PaperResult(**llm_candidates[idx].model_dump(), **item))
+                continue
             if isinstance(item, Exception):
                 results.append(
                     PaperResult(
-                        **papers[idx].model_dump(),
-                        **self._heuristic_analysis(parsed_query, papers[idx]),
+                        **llm_candidates[idx].model_dump(),
+                        **self._heuristic_analysis(parsed_query, llm_candidates[idx]),
                     )
                 )
                 continue
             results.append(item)
+
+        if overflow_candidates:
+            overflow_results = [
+                PaperResult(**paper.model_dump(), **self._heuristic_analysis(parsed_query, paper))
+                for paper in overflow_candidates
+            ]
+            results.extend(overflow_results)
 
         relevant = [item for item in results if item.is_relevant]
         if not relevant:

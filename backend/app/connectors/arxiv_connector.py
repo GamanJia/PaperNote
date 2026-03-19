@@ -25,6 +25,7 @@ class ArxivConnector(BaseConnector):
         "emnlp": "empirical methods in natural language processing",
         "aamas": "international conference on autonomous agents and multiagent systems",
         "ijcai": "international joint conference on artificial intelligence",
+        "asplos": "architectural support for programming languages and operating systems",
         "cvpr": "conference on computer vision and pattern recognition",
         "eccv": "european conference on computer vision",
         "iccv": "international conference on computer vision",
