@@ -1,0 +1,89 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500&display=swap");
+
+:root {
+  --pn-bg: #f3f0e8;
+  --pn-surface: #f8f6f1;
+  --pn-border: #d8d2c3;
+  --pn-ink: #1f1b16;
+  --pn-ink-soft: #4f4639;
+  --pn-accent: #1d5f57;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", sans-serif;
+  color: var(--pn-ink);
+  background:
+    radial-gradient(circle at 20% 20%, #fdfbf5 0%, transparent 35%),
+    radial-gradient(circle at 80% 10%, #e6eee9 0%, transparent 30%),
+    linear-gradient(135deg, #f3f0e8 0%, #ebe7dc 100%);
+}
+
+.pn-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(31, 27, 22, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid #3b352e;
+}
+
+.pn-header-inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pn-menu {
+  background: transparent !important;
+  color: #f6f2e9 !important;
+  border-bottom: none !important;
+  min-width: 300px;
+}
+
+.pn-content {
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.ant-card {
+  border: 1px solid var(--pn-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(248, 246, 241, 0.95));
+  box-shadow: 0 14px 35px rgba(49, 38, 24, 0.08);
+}
+
+.ant-typography h3,
+.ant-typography h4 {
+  font-family: "Fraunces", serif;
+  color: var(--pn-ink);
+}
+
+.ant-btn-primary {
+  background: var(--pn-accent);
+}
+
+@media (max-width: 900px) {
+  .pn-header-inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .pn-menu {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .pn-content {
+    padding: 12px;
+  }
+}

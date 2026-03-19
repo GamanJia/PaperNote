@@ -1,0 +1,46 @@
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.coverage
+*.log
+.venv/
+venv/
+env/
+
+# Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+frontend/.vite/
+
+# Data runtime outputs
+data/cache/*
+!data/cache/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+data/searches/*
+!data/searches/.gitkeep
+data/config/settings.json
+data/cache/*.json
+data/exports/*.csv
+data/exports/*.xlsx
+data/exports/*.md
+data/searches/*.json
+data/searches/*.md
+
+# Misc
+backend/package-lock.json
+*.swp
+*.swo
+
+# macOS / editor
+.DS_Store
+.idea/
+.vscode/
