@@ -21,8 +21,6 @@ class PaperSearchService:
         self.cache_repository = cache_repository
         # 单数据源硬超时，避免前端长时间无响应。
         self.source_timeout_seconds = 25
-        # 会议/期刊硬过滤召回过低时，自动降级为软约束，优先保证“研究方向”有结果。
-        self.venue_relax_trigger_count = 5
 
     def _deduplicate(self, papers: list[Paper]) -> list[Paper]:
         seen: set[str] = set()
@@ -122,7 +120,6 @@ class PaperSearchService:
 
         ttl_seconds = request.params.cache_ttl_minutes * 60
         fallback_date_relaxed = False
-        fallback_venue_relaxed = False
 
         async def fetch_from_sources(connector_query: ConnectorQuery) -> tuple[list[Paper], dict[str, int], list[str]]:
             local_source_counts: dict[str, int] = {}
@@ -164,18 +161,6 @@ class PaperSearchService:
 
         merged, source_counts, failed_sources = await fetch_from_sources(query)
 
-        if len(merged) < self.venue_relax_trigger_count and (query.conferences or query.journals):
-            relaxed_query = query.model_copy(deep=True)
-            relaxed_query.strict_venue_match = False
-            relaxed_merged, relaxed_source_counts, relaxed_failed_sources = await fetch_from_sources(
-                relaxed_query
-            )
-            if len(relaxed_merged) > len(merged):
-                merged = relaxed_merged
-                source_counts = relaxed_source_counts
-                failed_sources = relaxed_failed_sources
-                fallback_venue_relaxed = True
-
         # 若用户仅选择了单日窗口且无结果，则自动放宽到整年范围重试一次。
         if (
             not merged
@@ -207,6 +192,5 @@ class PaperSearchService:
             "deduped_candidates": len(deduped),
             "searched_at": datetime.utcnow().isoformat(),
             "fallback_date_relaxed": fallback_date_relaxed,
-            "fallback_venue_relaxed": fallback_venue_relaxed,
         }
         return deduped, stats
