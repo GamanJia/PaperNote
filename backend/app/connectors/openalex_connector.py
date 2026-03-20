@@ -28,6 +28,17 @@ class OpenAlexConnector(BaseConnector):
         "eccv": "european conference on computer vision",
         "iccv": "international conference on computer vision",
     }
+    venue_soft_aliases: dict[str, tuple[str, ...]] = {
+        "iccv": ("computer vision", "vision"),
+        "cvpr": ("computer vision", "vision"),
+        "eccv": ("computer vision", "vision"),
+        "icml": ("machine learning",),
+        "iclr": ("representation learning", "machine learning"),
+        "neurips": ("machine learning", "neural network"),
+        "nips": ("machine learning", "neural network"),
+        "aaai": ("artificial intelligence", "ai"),
+        "asplos": ("computer architecture", "systems"),
+    }
     keyword_hints = {
         "大语言模型": "large language model",
         "大型语言模型": "large language model",
@@ -154,6 +165,34 @@ class OpenAlexConnector(BaseConnector):
                     return True
         return False
 
+    def _matches_target_soft(
+        self,
+        raw_item: dict,
+        venue_texts: list[str],
+        journals: list[str],
+        conferences: list[str],
+    ) -> bool:
+        targets = [item for item in journals + conferences if item]
+        if not targets:
+            return True
+
+        merged_text = " ".join(venue_texts).lower()
+        body_text = self._raw_item_text(raw_item)
+        searchable = f"{merged_text} {body_text}".strip()
+        if not searchable:
+            return False
+
+        for normalized in self._iter_normalized_targets(journals, conferences):
+            alias = self.venue_aliases.get(normalized)
+            if normalized in searchable:
+                return True
+            if alias and alias in searchable:
+                return True
+            for soft_token in self.venue_soft_aliases.get(normalized, ()):
+                if soft_token and soft_token in searchable:
+                    return True
+        return False
+
     def _pick_display_venue(
         self,
         primary_venue: str | None,
@@ -186,6 +225,17 @@ class OpenAlexConnector(BaseConnector):
             if lowered not in seen:
                 seen.add(lowered)
                 result.append(normalized)
+
+            alias = self.venue_aliases.get(lowered)
+            if alias and alias not in seen:
+                seen.add(alias)
+                result.append(alias)
+
+            for soft_token in self.venue_soft_aliases.get(lowered, ()):
+                soft_lower = soft_token.lower()
+                if soft_lower not in seen:
+                    seen.add(soft_lower)
+                    result.append(soft_token)
 
             for key, mapped in self.keyword_hints.items():
                 if key in normalized:
@@ -363,12 +413,18 @@ class OpenAlexConnector(BaseConnector):
             primary_venue = source.get("display_name")
             venue_texts = self._extract_venue_texts(item)
 
-            if query.strict_venue_match and not self._matches_venue(
-                venue_texts,
-                query.journals,
-                query.conferences,
-            ):
-                continue
+            strict_venue_match = self._matches_venue(venue_texts, query.journals, query.conferences)
+            if query.strict_venue_match:
+                if not strict_venue_match:
+                    continue
+            else:
+                if not strict_venue_match and not self._matches_target_soft(
+                    item,
+                    venue_texts,
+                    query.journals,
+                    query.conferences,
+                ):
+                    continue
 
             venue = self._pick_display_venue(primary_venue, venue_texts, query.journals, query.conferences)
             doi = normalize_doi(item.get("doi"))

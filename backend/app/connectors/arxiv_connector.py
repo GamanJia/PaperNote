@@ -184,13 +184,12 @@ class ArxivConnector(BaseConnector):
             if not self._within_date_range(published_date, query.date_start, query.date_end):
                 continue
 
-            if query.strict_venue_match:
-                if not self._matches_venue(
-                    venue_texts=[journal_ref, comment, title, abstract],
-                    journals=query.journals,
-                    conferences=query.conferences,
-                ):
-                    continue
+            if not self._matches_venue(
+                venue_texts=[journal_ref, comment, title, abstract],
+                journals=query.journals,
+                conferences=query.conferences,
+            ):
+                continue
 
             authors = [
                 (node.findtext("atom:name", default="", namespaces=self.namespace) or "").strip()
