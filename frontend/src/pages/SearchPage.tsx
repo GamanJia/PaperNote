@@ -66,6 +66,30 @@ const BACKEND_DEFAULT_MODEL_FALLBACK: LLMConfig = {
   max_tokens: 1024
 };
 
+const VENUE_SHORT_NAMES: Record<string, string> = {
+  "Neural Information Processing Systems": "NeurIPS",
+  "International Conference on Neural Information Processing": "ICONIP",
+  "International Conference on Machine Learning": "ICML",
+  "International Conference on Learning Representations": "ICLR",
+  "Conference on Computer Vision and Pattern Recognition": "CVPR",
+  "International Conference on Computer Vision": "ICCV",
+  "European Conference on Computer Vision": "ECCV",
+  "AAAI Conference on Artificial Intelligence": "AAAI",
+  "International Conference on Autonomous Agents and Multiagent Systems": "AAMAS",
+  "Annual Meeting of the Association for Computational Linguistics": "ACL",
+  "Architectural Support for Programming Languages and Operating Systems": "ASPLOS"
+};
+
+function toVenueSelectOptions(items: string[]): Array<{ label: string; value: string }> {
+  return items.map((item) => {
+    const shortName = VENUE_SHORT_NAMES[item];
+    if (!shortName) {
+      return { label: item, value: item };
+    }
+    return { label: `${shortName} | ${item}`, value: item };
+  });
+}
+
 function toPayload(values: SearchFormValues, model: LLMConfig): SearchRequest {
   return {
     filters: {
@@ -187,6 +211,11 @@ export function SearchPage() {
       message.warning("默认模型配置未加载，已回退为后端默认配置继续检索。");
     }
     const requestModel = activeModel ?? BACKEND_DEFAULT_MODEL_FALLBACK;
+    if (values.conferences?.includes("International Conference on Neural Information Processing")) {
+      message.warning(
+        "你当前选择的是 ICONIP（International Conference on Neural Information Processing），不是 NeurIPS。"
+      );
+    }
     if (values.date_start && values.date_end && values.date_start.isSame(values.date_end, "day")) {
       message.warning("当前日期范围仅 1 天，可能导致 0 结果。建议扩大到至少 1 个月。");
     }
@@ -280,7 +309,7 @@ export function SearchPage() {
                   loading={venueOptionsLoading}
                   placeholder="从数据源可检索期刊中选择"
                   optionFilterProp="label"
-                  options={venueOptions.journals.map((item) => ({ label: item, value: item }))}
+                  options={toVenueSelectOptions(venueOptions.journals)}
                 />
               </Form.Item>
             </Col>
@@ -294,7 +323,7 @@ export function SearchPage() {
                   loading={venueOptionsLoading}
                   placeholder="从数据源可检索会议中选择"
                   optionFilterProp="label"
-                  options={venueOptions.conferences.map((item) => ({ label: item, value: item }))}
+                  options={toVenueSelectOptions(venueOptions.conferences)}
                 />
               </Form.Item>
             </Col>

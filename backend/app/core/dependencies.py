@@ -68,7 +68,9 @@ def get_connectors() -> dict[str, BaseConnector]:
             mailto=runtime_config.openalex_mailto or None,
             trust_env_proxy=runtime_config.openalex_trust_env_proxy,
         ),
-        "arxiv": ArxivConnector(),
+        "arxiv": ArxivConnector(
+            trust_env_proxy=runtime_config.openalex_trust_env_proxy,
+        ),
     }
 
 

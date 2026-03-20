@@ -74,7 +74,12 @@ class PaperSearchService:
             result.append(paper)
         return result
 
-    def _sort_papers(self, papers: list[Paper], sort_by: str) -> list[Paper]:
+    def _sort_papers(
+        self,
+        papers: list[Paper],
+        sort_by: str,
+        relevance_terms: list[str] | None = None,
+    ) -> list[Paper]:
         if sort_by == "date_desc":
             return sorted(
                 papers,
@@ -87,7 +92,35 @@ class PaperSearchService:
                 key=lambda item: item.year or 0,
                 reverse=True,
             )
-        return papers
+
+        normalized_terms: list[str] = []
+        seen: set[str] = set()
+        for term in relevance_terms or []:
+            normalized = term.lower().strip()
+            if len(normalized) < 2 or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_terms.append(normalized)
+
+        if not normalized_terms:
+            return papers
+
+        current_year = datetime.utcnow().year
+
+        def score(item: Paper) -> tuple[int, str, int]:
+            text = f"{item.title} {item.abstract}".lower()
+            score_value = 0
+            for term in normalized_terms:
+                if term not in text:
+                    continue
+                # 短词给较低权重，短语给更高权重，减少噪声命中。
+                score_value += 1 if len(term) <= 4 else 3
+
+            if item.year and item.year >= current_year - 2:
+                score_value += 1
+            return score_value, item.published_date or "", item.year or 0
+
+        return sorted(papers, key=score, reverse=True)
 
     def _matches_requested_venue(self, paper: Paper, journals: list[str], conferences: list[str]) -> bool:
         targets = [item for item in journals + conferences if item]
@@ -268,7 +301,11 @@ class PaperSearchService:
         )
         venue_filtered_out = max(0, len(deduped_before_venue) - len(deduped))
         deduped = self._apply_excludes(deduped, parsed_query)
-        deduped = self._sort_papers(deduped, request.params.sort_by)
+        deduped = self._sort_papers(
+            deduped,
+            request.params.sort_by,
+            relevance_terms=keywords,
+        )
 
         max_candidates = max(request.params.max_results * 3, request.params.max_results)
         deduped = deduped[:max_candidates]

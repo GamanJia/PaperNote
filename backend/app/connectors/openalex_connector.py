@@ -407,7 +407,13 @@ class OpenAlexConnector(BaseConnector):
             trust_env=self.trust_env_proxy,
             headers=headers,
         ) as client:
-            for search_query in search_queries:
+            supplemental_queries = self._build_core_semantic_queries(query)
+            issued_search_keys: set[str] = set()
+            for search_query in search_queries + supplemental_queries:
+                key = (search_query or "").strip().lower() or "__none__"
+                if key in issued_search_keys:
+                    continue
+                issued_search_keys.add(key)
                 params = base_params.copy()
                 if search_query:
                     params["search"] = search_query

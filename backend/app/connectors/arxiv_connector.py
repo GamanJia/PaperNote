@@ -30,20 +30,24 @@ class ArxivConnector(BaseConnector):
         "eccv": "european conference on computer vision",
         "iccv": "international conference on computer vision",
     }
-    keyword_hints = {
-        "大语言模型": "large language model",
-        "大型语言模型": "large language model",
-        "多智能体": "multi-agent",
-        "智能体": "agent",
-        "记忆": "memory",
-        "协作": "collaboration",
-        "推理": "reasoning",
+    keyword_hints: dict[str, tuple[str, ...]] = {
+        "大语言模型": ("large language model", "llm", "language model"),
+        "大型语言模型": ("large language model", "llm", "language model"),
+        "多智能体记忆": ("agentic memory", "multi-agent memory", "agent memory"),
+        "多智能体": ("multi-agent", "multi agent", "agent collaboration"),
+        "智能体": ("agent", "agentic"),
+        "记忆": ("memory", "long-term memory", "episodic memory"),
+        "协作": ("collaboration", "coordination"),
+        "推理": ("reasoning", "inference"),
     }
 
     namespace = {
         "atom": "http://www.w3.org/2005/Atom",
         "arxiv": "http://arxiv.org/schemas/atom",
     }
+
+    def __init__(self, trust_env_proxy: bool = False) -> None:
+        self.trust_env_proxy = trust_env_proxy
 
     def _expand_terms(self, terms: list[str]) -> list[str]:
         result: list[str] = []
@@ -57,12 +61,15 @@ class ArxivConnector(BaseConnector):
                 seen.add(lowered)
                 result.append(normalized)
 
-            for key, mapped in self.keyword_hints.items():
-                if key in normalized:
+            for key, mapped_terms in self.keyword_hints.items():
+                if key not in lowered:
+                    continue
+                for mapped in mapped_terms:
                     mapped_lower = mapped.lower()
-                    if mapped_lower not in seen:
-                        seen.add(mapped_lower)
-                        result.append(mapped)
+                    if mapped_lower in seen:
+                        continue
+                    seen.add(mapped_lower)
+                    result.append(mapped)
         return result
 
     def _build_query(self, query: ConnectorQuery) -> str:
@@ -80,7 +87,7 @@ class ArxivConnector(BaseConnector):
         priority_set = set(priority_terms)
         ordered_terms = priority_terms + [item for item in expanded_terms if item not in priority_set]
         english_terms = [item for item in ordered_terms if re.search(r"[A-Za-z]", item)]
-        selected_terms = english_terms[:8] if english_terms else ordered_terms[:8]
+        selected_terms = english_terms[:12] if english_terms else ordered_terms[:12]
         if not selected_terms:
             selected_terms = ["machine learning"]
 
@@ -151,15 +158,16 @@ class ArxivConnector(BaseConnector):
         return True
 
     async def search(self, query: ConnectorQuery) -> list[Paper]:
+        fetch_limit = max(query.max_results * 5, 120)
         params = {
             "search_query": self._build_query(query),
             "start": 0,
-            "max_results": max(5, min(query.max_results, 100)),
+            "max_results": max(20, min(fetch_limit, 300)),
             "sortBy": "relevance",
             "sortOrder": "descending",
         }
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, trust_env=self.trust_env_proxy) as client:
             response = await client.get(self.endpoint, params=params)
             response.raise_for_status()
             content = response.text
