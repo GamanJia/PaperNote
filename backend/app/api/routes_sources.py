@@ -2,16 +2,97 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Iterable
 
 import httpx
 from fastapi import APIRouter, Query
 
-from app.core.dependencies import get_connectors, get_runtime_config
+from app.core.dependencies import get_connectors, get_file_storage, get_runtime_config
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
 _venues_cache_payload: dict[str, list[str]] | None = None
 _venues_cache_expires_at: datetime | None = None
+_venue_query_aliases: dict[str, str] = {
+    "neurips": "Neural Information Processing Systems",
+    "nips": "Neural Information Processing Systems",
+    "icml": "International Conference on Machine Learning",
+    "iclr": "International Conference on Learning Representations",
+    "iccv": "International Conference on Computer Vision",
+    "cvpr": "Conference on Computer Vision and Pattern Recognition",
+    "eccv": "European Conference on Computer Vision",
+    "aaai": "AAAI Conference on Artificial Intelligence",
+    "acl": "Annual Meeting of the Association for Computational Linguistics",
+    "asplos": "Architectural Support for Programming Languages and Operating Systems",
+}
+
+
+def _unique_items(values: Iterable[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        normalized = item.strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped
+
+
+def _expand_query_terms(keyword: str | None) -> list[str]:
+    normalized = (keyword or "").strip()
+    if not normalized:
+        return []
+    terms = [normalized]
+    alias = _venue_query_aliases.get(normalized.lower())
+    if alias:
+        terms.append(alias)
+    return _unique_items(terms)
+
+
+def _cache_file_path() -> Path:
+    runtime = get_runtime_config()
+    return runtime.cache_dir / "venue_options_cache.json"
+
+
+def _load_disk_cache() -> dict[str, list[str]] | None:
+    payload = get_file_storage().read_json(_cache_file_path(), default=None)
+    if not isinstance(payload, dict):
+        return None
+    conferences = payload.get("conferences")
+    journals = payload.get("journals")
+    if not isinstance(conferences, list) or not isinstance(journals, list):
+        return None
+    result = {
+        "conferences": _unique_items(str(item) for item in conferences),
+        "journals": _unique_items(str(item) for item in journals),
+    }
+    return result
+
+
+def _save_disk_cache(payload: dict[str, list[str]]) -> None:
+    get_file_storage().write_json_atomic(_cache_file_path(), payload)
+
+
+def _filter_cached_venues(payload: dict[str, list[str]], keyword: str | None) -> dict[str, list[str]]:
+    normalized = (keyword or "").strip().lower()
+    if not normalized:
+        return payload
+    terms = [item.lower() for item in _expand_query_terms(keyword)] or [normalized]
+
+    def pick(rows: list[str]) -> list[str]:
+        result: list[str] = []
+        for row in rows:
+            lowered = row.lower()
+            if any(term in lowered for term in terms):
+                result.append(row)
+        return result
+
+    return {"conferences": pick(payload.get("conferences", [])), "journals": pick(payload.get("journals", []))}
 
 async def _fetch_openalex_venues(
     kind: str,
@@ -66,6 +147,38 @@ async def _fetch_openalex_venues(
     return names[:bounded_limit]
 
 
+async def _fetch_openalex_venues_multi(
+    kind: str,
+    limit: int,
+    trust_env_proxy: bool,
+    keyword: str | None,
+) -> list[str]:
+    terms = _expand_query_terms(keyword)
+    if not terms:
+        return await _fetch_openalex_venues(kind, limit, trust_env_proxy, keyword=None)
+
+    per_term_limit = max(20, min(limit, 200))
+    results = await asyncio.gather(
+        *[
+            _fetch_openalex_venues(
+                kind=kind,
+                limit=per_term_limit,
+                trust_env_proxy=trust_env_proxy,
+                keyword=term,
+            )
+            for term in terms
+        ],
+        return_exceptions=True,
+    )
+
+    merged: list[str] = []
+    for item in results:
+        if isinstance(item, Exception):
+            continue
+        merged.extend(item)
+    return _unique_items(merged)[:limit]
+
+
 async def _list_venue_options(keyword: str | None, limit: int) -> dict[str, list[str]]:
     global _venues_cache_payload, _venues_cache_expires_at
 
@@ -83,13 +196,13 @@ async def _list_venue_options(keyword: str | None, limit: int) -> dict[str, list
     runtime = get_runtime_config()
     try:
         conferences, journals = await asyncio.gather(
-            _fetch_openalex_venues(
+            _fetch_openalex_venues_multi(
                 kind="conference",
                 limit=limit,
                 trust_env_proxy=runtime.openalex_trust_env_proxy,
                 keyword=normalized_keyword or None,
             ),
-            _fetch_openalex_venues(
+            _fetch_openalex_venues_multi(
                 kind="journal",
                 limit=limit,
                 trust_env_proxy=runtime.openalex_trust_env_proxy,
@@ -100,12 +213,16 @@ async def _list_venue_options(keyword: str | None, limit: int) -> dict[str, list
     except Exception:
         # 仅返回历史已从数据源获取到的缓存，避免注入无法验证可检索性的硬编码选项。
         if _venues_cache_payload:
-            return _venues_cache_payload
+            return _filter_cached_venues(_venues_cache_payload, normalized_keyword)
+        disk_cache = _load_disk_cache()
+        if disk_cache:
+            return _filter_cached_venues(disk_cache, normalized_keyword)
         return {"conferences": [], "journals": []}
 
     if cacheable:
         _venues_cache_payload = result
         _venues_cache_expires_at = now + timedelta(hours=12)
+        _save_disk_cache(result)
     return result
 
 

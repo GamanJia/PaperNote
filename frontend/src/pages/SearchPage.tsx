@@ -65,6 +65,7 @@ const BACKEND_DEFAULT_MODEL_FALLBACK: LLMConfig = {
   temperature: 0.2,
   max_tokens: 1024
 };
+const VENUE_SEARCH_DEBOUNCE_MS = 300;
 
 const VENUE_SHORT_NAMES: Record<string, string> = {
   "Neural Information Processing Systems": "NeurIPS",
@@ -88,6 +89,16 @@ function toVenueSelectOptions(items: string[]): Array<{ label: string; value: st
     }
     return { label: `${shortName} | ${item}`, value: item };
   });
+}
+
+function uniqueValues(items: string[]): string[] {
+  return Array.from(
+    new Set(
+      items
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    )
+  );
 }
 
 function toPayload(values: SearchFormValues, model: LLMConfig): SearchRequest {
@@ -126,12 +137,20 @@ export function SearchPage() {
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
   const [sources, setSources] = useState<SourceItem[]>([]);
   const [modelConfig, setModelConfig] = useState<LLMConfig | null>(null);
+  const [defaultVenueOptions, setDefaultVenueOptions] = useState<VenueOptions>({
+    conferences: [],
+    journals: []
+  });
   const [venueOptions, setVenueOptions] = useState<VenueOptions>({
     conferences: [],
     journals: []
   });
   const [venueOptionsLoading, setVenueOptionsLoading] = useState(false);
+  const [conferenceSearchLoading, setConferenceSearchLoading] = useState(false);
+  const [journalSearchLoading, setJournalSearchLoading] = useState(false);
   const progressTimerRef = useRef<number | null>(null);
+  const conferenceSearchTimerRef = useRef<number | null>(null);
+  const journalSearchTimerRef = useRef<number | null>(null);
 
   const stopProgressTicker = () => {
     if (progressTimerRef.current !== null) {
@@ -174,6 +193,83 @@ export function SearchPage() {
     }
   };
 
+  const selectedConferenceValues = () =>
+    uniqueValues((form.getFieldValue("conferences") ?? []) as string[]);
+  const selectedJournalValues = () => uniqueValues((form.getFieldValue("journals") ?? []) as string[]);
+
+  const applyVenueOptions = (next: VenueOptions) => {
+    setVenueOptions({
+      conferences: uniqueValues([...next.conferences, ...selectedConferenceValues()]),
+      journals: uniqueValues([...next.journals, ...selectedJournalValues()])
+    });
+  };
+
+  const searchConferenceOptions = (rawKeyword: string) => {
+    const keyword = rawKeyword.trim();
+    if (conferenceSearchTimerRef.current !== null) {
+      window.clearTimeout(conferenceSearchTimerRef.current);
+      conferenceSearchTimerRef.current = null;
+    }
+
+    conferenceSearchTimerRef.current = window.setTimeout(() => {
+      if (!keyword) {
+        setVenueOptions((prev) => ({
+          ...prev,
+          conferences: uniqueValues([...defaultVenueOptions.conferences, ...selectedConferenceValues()])
+        }));
+        return;
+      }
+
+      setConferenceSearchLoading(true);
+      listVenueOptions({ q: keyword, limit: 120 })
+        .then((data) => {
+          setVenueOptions((prev) => ({
+            ...prev,
+            conferences: uniqueValues([...data.conferences, ...selectedConferenceValues()])
+          }));
+        })
+        .catch(() => {
+          // 输入联想失败时不打断用户，只保留当前可选项。
+        })
+        .finally(() => {
+          setConferenceSearchLoading(false);
+        });
+    }, VENUE_SEARCH_DEBOUNCE_MS);
+  };
+
+  const searchJournalOptions = (rawKeyword: string) => {
+    const keyword = rawKeyword.trim();
+    if (journalSearchTimerRef.current !== null) {
+      window.clearTimeout(journalSearchTimerRef.current);
+      journalSearchTimerRef.current = null;
+    }
+
+    journalSearchTimerRef.current = window.setTimeout(() => {
+      if (!keyword) {
+        setVenueOptions((prev) => ({
+          ...prev,
+          journals: uniqueValues([...defaultVenueOptions.journals, ...selectedJournalValues()])
+        }));
+        return;
+      }
+
+      setJournalSearchLoading(true);
+      listVenueOptions({ q: keyword, limit: 120 })
+        .then((data) => {
+          setVenueOptions((prev) => ({
+            ...prev,
+            journals: uniqueValues([...data.journals, ...selectedJournalValues()])
+          }));
+        })
+        .catch(() => {
+          // 输入联想失败时不打断用户，只保留当前可选项。
+        })
+        .finally(() => {
+          setJournalSearchLoading(false);
+        });
+    }, VENUE_SEARCH_DEBOUNCE_MS);
+  };
+
   useEffect(() => {
     listSources()
       .then((sourceData) => {
@@ -184,7 +280,8 @@ export function SearchPage() {
     setVenueOptionsLoading(true);
     listVenueOptions({ limit: 300 })
       .then((venueData) => {
-        setVenueOptions(venueData);
+        setDefaultVenueOptions(venueData);
+        applyVenueOptions(venueData);
       })
       .catch((error: Error) => message.error(error.message))
       .finally(() => {
@@ -199,8 +296,14 @@ export function SearchPage() {
 
     return () => {
       stopProgressTicker();
+      if (conferenceSearchTimerRef.current !== null) {
+        window.clearTimeout(conferenceSearchTimerRef.current);
+      }
+      if (journalSearchTimerRef.current !== null) {
+        window.clearTimeout(journalSearchTimerRef.current);
+      }
     };
-  }, []);
+  }, [form]);
 
   const onSearch = async (values: SearchFormValues) => {
     let activeModel = modelConfig;
@@ -275,6 +378,10 @@ export function SearchPage() {
     }
   };
 
+  const conferenceSelectMode: "multiple" | "tags" =
+    venueOptions.conferences.length > 0 ? "multiple" : "tags";
+  const journalSelectMode: "multiple" | "tags" = venueOptions.journals.length > 0 ? "multiple" : "tags";
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Card>
@@ -302,13 +409,19 @@ export function SearchPage() {
             <Col span={12}>
               <Form.Item name="journals" label="期刊（可多选）">
                 <Select
-                  mode="multiple"
+                  mode={journalSelectMode}
                   showSearch
                   allowClear
                   maxTagCount="responsive"
-                  loading={venueOptionsLoading}
-                  placeholder="从数据源可检索期刊中选择"
+                  loading={venueOptionsLoading || journalSearchLoading}
+                  placeholder={
+                    journalSelectMode === "multiple"
+                      ? "从数据源可检索期刊中选择（支持输入联想）"
+                      : "数据源列表不可用，先手动输入期刊名"
+                  }
                   optionFilterProp="label"
+                  onSearch={searchJournalOptions}
+                  notFoundContent="未找到匹配期刊，继续输入可联想查询"
                   options={toVenueSelectOptions(venueOptions.journals)}
                 />
               </Form.Item>
@@ -316,13 +429,19 @@ export function SearchPage() {
             <Col span={12}>
               <Form.Item name="conferences" label="会议（可多选）">
                 <Select
-                  mode="multiple"
+                  mode={conferenceSelectMode}
                   showSearch
                   allowClear
                   maxTagCount="responsive"
-                  loading={venueOptionsLoading}
-                  placeholder="从数据源可检索会议中选择"
+                  loading={venueOptionsLoading || conferenceSearchLoading}
+                  placeholder={
+                    conferenceSelectMode === "multiple"
+                      ? "从数据源可检索会议中选择（支持输入联想）"
+                      : "数据源列表不可用，先手动输入会议名"
+                  }
                   optionFilterProp="label"
+                  onSearch={searchConferenceOptions}
+                  notFoundContent="未找到匹配会议，继续输入可联想查询"
                   options={toVenueSelectOptions(venueOptions.conferences)}
                 />
               </Form.Item>
@@ -421,7 +540,7 @@ export function SearchPage() {
             <Alert
               type="warning"
               showIcon
-              message="会议/期刊可选项加载失败，当前仅能在不指定 venue 的情况下检索。"
+              message="会议/期刊可选项加载失败，已切换为手动输入模式。建议稍后重试加载，确保 venue 选项来自数据源。"
             />
           ) : null}
 
