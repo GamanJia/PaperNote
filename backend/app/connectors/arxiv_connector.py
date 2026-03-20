@@ -185,7 +185,7 @@ class ArxivConnector(BaseConnector):
                 continue
 
             if not self._matches_venue(
-                venue_texts=[journal_ref, comment, title, abstract],
+                venue_texts=[journal_ref, comment],
                 journals=query.journals,
                 conferences=query.conferences,
             ):

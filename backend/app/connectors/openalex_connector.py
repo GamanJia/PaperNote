@@ -294,7 +294,7 @@ class OpenAlexConnector(BaseConnector):
             return [None]
         return deduped_queries[: self.max_query_variants]
 
-    def _build_core_semantic_query(self, query: ConnectorQuery) -> str | None:
+    def _build_core_semantic_queries(self, query: ConnectorQuery) -> list[str | None]:
         terms = query.keywords[:]
         if query.research_direction:
             terms.append(query.research_direction)
@@ -302,15 +302,49 @@ class OpenAlexConnector(BaseConnector):
             terms.append(query.paper_description)
         expanded = self._expand_terms(terms)
         english = [item for item in expanded if re.search(r"[A-Za-z]", item)]
-        core = [
-            item
-            for item in english
-            if any(token in item.lower() for token in self.core_semantic_tokens)
-        ]
-        selected = core[:6] if core else english[:6]
-        if not selected:
-            return None
-        return " ".join(selected)
+
+        lowered_english = [item.lower() for item in english]
+        compact: list[str] = []
+        if any(token in item for item in lowered_english for token in self.llm_semantic_tokens):
+            compact.append("large language model")
+        if any("agent" in item for item in lowered_english):
+            compact.append("agent")
+        if any("memory" in item for item in lowered_english):
+            compact.append("memory")
+
+        queries: list[str] = []
+        if compact:
+            if "large language model" in compact:
+                queries.append("large language model")
+            if "agent" in compact and "memory" in compact:
+                queries.append("agent memory")
+            if "agent" in compact:
+                queries.append("agent")
+            if "memory" in compact:
+                queries.append("memory")
+        else:
+            core = [
+                item
+                for item in english
+                if any(token in item.lower() for token in self.core_semantic_tokens)
+            ]
+            selected = core[:4] if core else english[:4]
+            if selected:
+                queries.extend(selected[:2])
+                queries.append(" ".join(selected[:3]))
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in queries:
+            normalized = item.strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(item.strip())
+
+        if deduped:
+            return deduped[:3]
+        return [None]
 
     def _raw_item_key(self, item: dict) -> str:
         doi = normalize_doi(item.get("doi"))
@@ -386,15 +420,16 @@ class OpenAlexConnector(BaseConnector):
                 if source_id:
                     conference_source_ids.add(source_id)
 
-            targeted_query = self._build_core_semantic_query(query)
+            targeted_queries = self._build_core_semantic_queries(query)
             for source_id in conference_source_ids:
-                params = base_params.copy()
-                filters_text = str(params.get("filter") or "")
-                source_filter = f"locations.source.id:https://openalex.org/{source_id}"
-                params["filter"] = f"{source_filter},{filters_text}" if filters_text else source_filter
-                if targeted_query:
-                    params["search"] = targeted_query
-                raw_items.extend(await self._fetch_works(client, params))
+                for targeted_query in targeted_queries:
+                    params = base_params.copy()
+                    filters_text = str(params.get("filter") or "")
+                    source_filter = f"locations.source.id:https://openalex.org/{source_id}"
+                    params["filter"] = f"{source_filter},{filters_text}" if filters_text else source_filter
+                    if targeted_query:
+                        params["search"] = targeted_query
+                    raw_items.extend(await self._fetch_works(client, params))
 
         deduped_raw_items: list[dict] = []
         seen_item_keys: set[str] = set()

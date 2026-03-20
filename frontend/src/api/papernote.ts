@@ -6,7 +6,8 @@ import type {
   HistorySummary,
   SearchRequest,
   SearchResponse,
-  SourceItem
+  SourceItem,
+  VenueOptions
 } from "../types";
 import type { LLMConfig, PaperResult } from "../types";
 
@@ -70,4 +71,20 @@ export function testLLM(model: LLMConfig): Promise<{ ok: boolean; detail: string
 
 export function listSources(): Promise<SourceItem[]> {
   return apiRequest<SourceItem[]>("/api/sources");
+}
+
+export function listVenueOptions(params?: {
+  q?: string;
+  limit?: number;
+}): Promise<VenueOptions> {
+  const searchParams = new URLSearchParams();
+  if (params?.q?.trim()) {
+    searchParams.set("q", params.q.trim());
+  }
+  if (typeof params?.limit === "number") {
+    searchParams.set("limit", String(params.limit));
+  }
+  const queryString = searchParams.toString();
+  const path = queryString ? `/api/venue-options?${queryString}` : "/api/venue-options";
+  return apiRequest<VenueOptions>(path, { timeoutMs: 15000 });
 }

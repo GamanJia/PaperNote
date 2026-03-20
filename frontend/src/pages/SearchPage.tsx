@@ -20,9 +20,22 @@ import {
 } from "antd";
 import type { Dayjs } from "dayjs";
 import { buildApiUrl } from "../api/client";
-import { exportResults, getSettings, listSources, runSearch } from "../api/papernote";
+import {
+  exportResults,
+  getSettings,
+  listSources,
+  listVenueOptions,
+  runSearch
+} from "../api/papernote";
 import { ResultsTable } from "../components/ResultsTable";
-import type { AppSettings, LLMConfig, SearchRequest, SearchResponse, SourceItem } from "../types";
+import type {
+  AppSettings,
+  LLMConfig,
+  SearchRequest,
+  SearchResponse,
+  SourceItem,
+  VenueOptions
+} from "../types";
 
 const { TextArea } = Input;
 const { Title, Text } = Typography;
@@ -89,6 +102,11 @@ export function SearchPage() {
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
   const [sources, setSources] = useState<SourceItem[]>([]);
   const [modelConfig, setModelConfig] = useState<LLMConfig | null>(null);
+  const [venueOptions, setVenueOptions] = useState<VenueOptions>({
+    conferences: [],
+    journals: []
+  });
+  const [venueOptionsLoading, setVenueOptionsLoading] = useState(false);
   const progressTimerRef = useRef<number | null>(null);
 
   const stopProgressTicker = () => {
@@ -139,6 +157,16 @@ export function SearchPage() {
       })
       .catch((error: Error) => message.error(error.message));
 
+    setVenueOptionsLoading(true);
+    listVenueOptions({ limit: 300 })
+      .then((venueData) => {
+        setVenueOptions(venueData);
+      })
+      .catch((error: Error) => message.error(error.message))
+      .finally(() => {
+        setVenueOptionsLoading(false);
+      });
+
     loadSettings(false).then((loaded) => {
       if (!loaded) {
         message.warning("默认模型配置加载失败，可稍后重试或检查后端服务。");
@@ -182,6 +210,14 @@ export function SearchPage() {
       if (response.stats.failed_sources.length) {
         message.warning(
           `部分数据源未完成：${response.stats.failed_sources.join(", ")}。已返回可用结果。`
+        );
+      }
+      if (response.stats.fallback_date_relaxed) {
+        message.info("当前查询触发了日期自动放宽（按年份边界）以避免误伤检索结果。");
+      }
+      if (response.results.length === 0 && response.stats.venue_filtered_out > 0) {
+        message.warning(
+          "当前开启了会议/期刊严格匹配，相关候选已因 venue 不一致被过滤。若需找 arXiv 预印本，请清空会议/期刊后重试。"
         );
       }
     } catch (error) {
@@ -236,12 +272,30 @@ export function SearchPage() {
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="journals" label="期刊（可多选）">
-                <Select mode="tags" placeholder="例如 Nature, Science" />
+                <Select
+                  mode="multiple"
+                  showSearch
+                  allowClear
+                  maxTagCount="responsive"
+                  loading={venueOptionsLoading}
+                  placeholder="从数据源可检索期刊中选择"
+                  optionFilterProp="label"
+                  options={venueOptions.journals.map((item) => ({ label: item, value: item }))}
+                />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="conferences" label="会议（可多选）">
-                <Select mode="tags" placeholder="例如 NeurIPS, ICLR" />
+                <Select
+                  mode="multiple"
+                  showSearch
+                  allowClear
+                  maxTagCount="responsive"
+                  loading={venueOptionsLoading}
+                  placeholder="从数据源可检索会议中选择"
+                  optionFilterProp="label"
+                  options={venueOptions.conferences.map((item) => ({ label: item, value: item }))}
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -332,6 +386,15 @@ export function SearchPage() {
             showIcon
             message="模型配置来自“设置页”（或 .env 默认值），检索页不再重复填写。"
           />
+          {!venueOptionsLoading &&
+          venueOptions.conferences.length === 0 &&
+          venueOptions.journals.length === 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="会议/期刊可选项加载失败，当前仅能在不指定 venue 的情况下检索。"
+            />
+          ) : null}
 
           {loading ? (
             <Space direction="vertical" style={{ width: "100%" }} size={4}>

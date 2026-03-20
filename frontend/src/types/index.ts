@@ -58,6 +58,8 @@ export interface SearchStats {
   final_results: number;
   source_counts: Record<string, number>;
   failed_sources: string[];
+  venue_filtered_out: number;
+  fallback_date_relaxed: boolean;
 }
 
 export interface PaperResult {
@@ -126,6 +128,11 @@ export interface AppSettings {
 export interface SourceItem {
   id: string;
   name: string;
+}
+
+export interface VenueOptions {
+  conferences: string[];
+  journals: string[];
 }
 
 export interface ExportResponse {

@@ -58,6 +58,8 @@ class SearchStats(BaseModel):
     final_results: int
     source_counts: dict[str, int] = Field(default_factory=dict)
     failed_sources: list[str] = Field(default_factory=list)
+    venue_filtered_out: int = 0
+    fallback_date_relaxed: bool = False
 
 
 class SearchResponse(BaseModel):

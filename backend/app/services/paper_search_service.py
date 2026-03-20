@@ -15,6 +15,21 @@ from app.utils.text_utils import normalize_doi, normalize_title, split_keywords
 
 class PaperSearchService:
     logger = logging.getLogger(__name__)
+    venue_aliases = {
+        "iclr": "international conference on learning representations",
+        "icml": "international conference on machine learning",
+        "neurips": "neural information processing systems",
+        "nips": "neural information processing systems",
+        "aaai": "aaai conference on artificial intelligence",
+        "acl": "annual meeting of the association for computational linguistics",
+        "emnlp": "empirical methods in natural language processing",
+        "aamas": "international conference on autonomous agents and multiagent systems",
+        "ijcai": "international joint conference on artificial intelligence",
+        "asplos": "architectural support for programming languages and operating systems",
+        "cvpr": "conference on computer vision and pattern recognition",
+        "eccv": "european conference on computer vision",
+        "iccv": "international conference on computer vision",
+    }
 
     def __init__(self, connectors: dict[str, BaseConnector], cache_repository: CacheRepository) -> None:
         self.connectors = connectors
@@ -73,6 +88,60 @@ class PaperSearchService:
                 reverse=True,
             )
         return papers
+
+    def _matches_requested_venue(self, paper: Paper, journals: list[str], conferences: list[str]) -> bool:
+        targets = [item for item in journals + conferences if item]
+        if not targets:
+            return True
+
+        normalized_venue = (paper.venue or "").lower().strip()
+        if not normalized_venue:
+            return False
+
+        for target in targets:
+            normalized_target = target.lower().strip()
+            if not normalized_target:
+                continue
+            if normalized_target in normalized_venue:
+                return True
+            alias = self.venue_aliases.get(normalized_target)
+            if alias and alias in normalized_venue:
+                return True
+        return False
+
+    def _apply_strict_venue_guard(
+        self,
+        papers: list[Paper],
+        journals: list[str],
+        conferences: list[str],
+    ) -> list[Paper]:
+        if not journals and not conferences:
+            return papers
+        return [paper for paper in papers if self._matches_requested_venue(paper, journals, conferences)]
+
+    def _extract_year(self, value: str | None) -> str | None:
+        if not value or len(value) < 4:
+            return None
+        year = value[:4]
+        if not year.isdigit():
+            return None
+        return year
+
+    def _build_year_relaxed_query(self, query: ConnectorQuery) -> ConnectorQuery | None:
+        start_year = self._extract_year(query.date_start)
+        end_year = self._extract_year(query.date_end)
+        if not start_year or not end_year:
+            return None
+
+        relaxed_start = f"{start_year}-01-01"
+        relaxed_end = f"{end_year}-12-31"
+        if query.date_start == relaxed_start and query.date_end == relaxed_end:
+            return None
+
+        relaxed_query = query.model_copy(deep=True)
+        relaxed_query.date_start = relaxed_start
+        relaxed_query.date_end = relaxed_end
+        return relaxed_query
 
     async def _search_one_source(
         self,
@@ -169,16 +238,35 @@ class PaperSearchService:
             and query.date_start == query.date_end
             and len(query.date_start) >= 4
         ):
-            year = query.date_start[:4]
-            if year.isdigit():
+            year = self._extract_year(query.date_start)
+            if year:
                 relaxed_query = query.model_copy(deep=True)
                 relaxed_query.date_start = f"{year}-01-01"
                 relaxed_query.date_end = f"{year}-12-31"
                 merged, source_counts, failed_sources = await fetch_from_sources(relaxed_query)
                 fallback_date_relaxed = True
 
+        # conference/journal 元数据常使用年份边界日期（如 2024-01-01），
+        # 当用户按月/日筛选且无结果时放宽到年份边界，减少误伤。
+        if (
+            not merged
+            and (query.conferences or query.journals)
+            and query.date_start
+            and query.date_end
+        ):
+            relaxed_query = self._build_year_relaxed_query(query)
+            if relaxed_query is not None:
+                merged, source_counts, failed_sources = await fetch_from_sources(relaxed_query)
+                fallback_date_relaxed = True
+
         total_candidates = len(merged)
-        deduped = self._deduplicate(merged)
+        deduped_before_venue = self._deduplicate(merged)
+        deduped = self._apply_strict_venue_guard(
+            deduped_before_venue,
+            request.filters.journals,
+            request.filters.conferences,
+        )
+        venue_filtered_out = max(0, len(deduped_before_venue) - len(deduped))
         deduped = self._apply_excludes(deduped, parsed_query)
         deduped = self._sort_papers(deduped, request.params.sort_by)
 
@@ -190,6 +278,7 @@ class PaperSearchService:
             "failed_sources": failed_sources,
             "total_candidates": total_candidates,
             "deduped_candidates": len(deduped),
+            "venue_filtered_out": venue_filtered_out,
             "searched_at": datetime.utcnow().isoformat(),
             "fallback_date_relaxed": fallback_date_relaxed,
         }

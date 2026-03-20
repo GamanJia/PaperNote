@@ -46,6 +46,8 @@ class SearchOrchestratorService:
             final_results=len(ranked_results),
             source_counts=source_stats.get("source_counts", {}),
             failed_sources=source_stats.get("failed_sources", []),
+            venue_filtered_out=int(source_stats.get("venue_filtered_out", 0) or 0),
+            fallback_date_relaxed=bool(source_stats.get("fallback_date_relaxed", False)),
         )
 
         search_id = self.history_repository.generate_search_id()
