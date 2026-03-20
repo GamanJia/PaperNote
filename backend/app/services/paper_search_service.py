@@ -184,7 +184,7 @@ class PaperSearchService:
         ttl_seconds: int,
     ) -> list[Paper]:
         cache_key = (
-            f"source:{source_key}:v11:"
+            f"source:{source_key}:v12:"
             f"{json.dumps(query.model_dump(mode='json'), ensure_ascii=False, sort_keys=True)}"
         )
         cached = self.cache_repository.get(cache_key)
